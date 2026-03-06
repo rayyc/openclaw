@@ -1,0 +1,33 @@
+/* Global styles */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --void: #02020a;
+  --panel: #0a0a1e;
+  --border: #1a1a40;
+  --accent: #00ffcc;
+  --hot: #ff3366;
+  --gold: #ffd700;
+  --purple: #7b2fff;
+  --dim: #4a4a7a;
+  --text: #c8c8f0;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--void);
+  color: var(--text);
+  font-family: var(--font-rajdhani), sans-serif;
+  min-height: 100vh;
+}
+
+.font-orbitron { font-family: var(--font-orbitron), monospace; }
+.font-mono-tech { font-family: var(--font-mono), monospace; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }

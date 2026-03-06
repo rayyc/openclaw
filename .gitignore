@@ -1,0 +1,99 @@
+# ── Admin & Security (NEVER commit these) ────────────────────────────────────
+ADMIN_SETUP.md
+create_admin_account.py
+
+# ── Environment variables (contain API keys and secrets) ─────────────────────
+.env
+.env.local
+.env.production
+.env.staging
+backend/.env
+frontend/.env.local
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+nosetests.xml
+test-results/
+
+# ── Node.js / Next.js ─────────────────────────────────────────────────────────
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.vercel/
+.npm
+.yarn/
+*.tsbuildinfo
+next-env.d.ts
+
+# ── Database ──────────────────────────────────────────────────────────────────
+*.sqlite
+*.sqlite3
+*.db
+alembic/versions/*.pyc
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+celery*.log
+uvicorn*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── OS files ──────────────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── VS Code ───────────────────────────────────────────────────────────────────
+.vscode/settings.json
+.vscode/launch.json
+.vscode/extensions.json
+!.vscode/recommended-extensions.json
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Docker ───────────────────────────────────────────────────────────────────
+docker-compose.override.yml
+
+# ── Celery ───────────────────────────────────────────────────────────────────
+celerybeat-schedule
+celerybeat.pid
+
+# ── MetaTrader5 ───────────────────────────────────────────────────────────────
+*.ex5
+*.mq5
