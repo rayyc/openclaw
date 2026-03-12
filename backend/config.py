@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # ── Deriv MT5 Trading ──────────────────────────────────────────────────────
     MT5_LOGIN: str = ""          # your MT5 login number e.g. 6030498
     MT5_PASSWORD: str = ""       # your MT5 password
-    MT5_SERVER: str = "Deriv-Demo"  # Deriv-Demo for demo, Deriv-Server for live
+    MT5_SERVER: str = "DerivSVG-Server"  # Deriv-Demo for demo, Deriv-Server for live
 
     # Dynamically locate .env in backend/ or project root
     model_config = ConfigDict(
