@@ -1,11 +1,9 @@
 # backend/agents/tools/mt5_tool.py
 """
 Deriv MT5 trading tool.
-Connects to Deriv-Demo MT5 server for price data and trade execution.
-Uses MetaTrader5 Python library — Windows only (perfect for local dev).
+Connects to Deriv MT5 server for price data and trade execution.
+Uses MetaTrader5 Python library — Windows only.
 """
-# MetaTrader5 has no type stubs — import as a plain module reference
-# and access all attributes via getattr to avoid Pylance attribute errors
 import importlib
 import datetime as dt
 from datetime import datetime, timezone
@@ -18,26 +16,70 @@ _mt5: Any = importlib.import_module("MetaTrader5")
 # ── Deriv MT5 connection config ───────────────────────────────────────────────
 MT5_LOGIN    = settings.MT5_LOGIN
 MT5_PASSWORD = settings.MT5_PASSWORD
-MT5_SERVER   = settings.MT5_SERVER  # "Deriv-Demo"
+MT5_SERVER   = settings.MT5_SERVER
 
 # ── Supported instruments ─────────────────────────────────────────────────────
-FOREX_PAIRS = [
-    "EURUSD", "GBPUSD", "USDJPY", "USDCHF",
-    "AUDUSD", "USDCAD", "NZDUSD",
-    "EURGBP", "EURJPY", "GBPJPY",
-    "EURCAD", "GBPCAD", "AUDCAD",
+# Ordered by spread (lowest first) — system scans in this order and picks
+# the best setup. Low-spread pairs are prioritised for small accounts.
+FOREX_MAJORS = [
+    "EURUSD",   # ~0.6 pips spread — tightest, best for small accounts
+    "USDJPY",   # ~0.7 pips
+    "GBPUSD",   # ~0.9 pips
+    "USDCHF",   # ~0.9 pips
+    "AUDUSD",   # ~0.9 pips
+    "USDCAD",   # ~1.0 pips
+    "NZDUSD",   # ~1.2 pips
+]
+
+FOREX_MINORS = [
+    "EURGBP",   # ~1.0 pips
+    "EURJPY",   # ~1.1 pips
+    "GBPJPY",   # ~1.4 pips
+    "EURCAD",   # ~1.8 pips
+    "GBPCAD",   # ~2.5 pips
+    "AUDCAD",   # ~2.0 pips
 ]
 
 COMMODITIES = [
-    "XAUUSD",   # Gold
-    "XAGUSD",   # Silver
+    "XAUUSD",   # Gold  — ~27 pips spread, needs $100+ balance
+    "XAGUSD",   # Silver — high spread, needs $100+ balance
     "USOIL",    # WTI Crude Oil
     "UKOIL",    # Brent Crude
 ]
 
-ALL_SYMBOLS = FOREX_PAIRS + COMMODITIES
+# Scan order: majors first (low spread), minors second, commodities last
+# This ensures small accounts get matched with tradeable instruments
+ALL_SYMBOLS = FOREX_MAJORS + FOREX_MINORS + COMMODITIES
 
-# ── Timeframe constants (accessed via _mt5 to avoid attribute errors) ─────────
+
+# ── Pip size helper ───────────────────────────────────────────────────────────
+def get_pip_size(symbol: str) -> float:
+    """
+    Return the correct pip size for a symbol.
+
+    This is the PRICE value of 1 pip — used for SL/TP calculation.
+    Different from pip MULTIPLIER used in ta_tool for display purposes.
+
+      JPY pairs  → 1 pip = 0.01   price units
+      XAU/USD    → 1 pip = 0.10   price units  (Gold quoted in dollars)
+      XAG/USD    → 1 pip = 0.001  price units
+      Oil        → 1 pip = 0.01   price units
+      Others     → 1 pip = 0.0001 price units
+    """
+    s = symbol.upper().replace("/", "").replace("-", "").replace("_", "")
+
+    if "JPY" in s:
+        return 0.01
+    if s in ("XAUUSD", "GOLD"):
+        return 0.10
+    if s in ("XAGUSD", "SILVER"):
+        return 0.001
+    if "OIL" in s or "WTI" in s or "BRENT" in s or "UKOIL" in s or "USOIL" in s:
+        return 0.01
+    return 0.0001
+
+
+# ── Timeframe constants ───────────────────────────────────────────────────────
 def _tf(name: str) -> Any:
     return getattr(_mt5, name)
 
@@ -74,7 +116,7 @@ def disconnect() -> None:
 # ── Price data ────────────────────────────────────────────────────────────────
 
 async def get_live_price(symbol: str) -> dict:
-    """Get current bid/ask price for a symbol."""
+    """Get current bid/ask price and spread for a symbol."""
     try:
         if not connect():
             return {"success": False, "error": "MT5 connection failed"}
@@ -84,9 +126,12 @@ async def get_live_price(symbol: str) -> dict:
             disconnect()
             return {"success": False, "error": f"Symbol {symbol} not found or market closed"}
 
-        info   = _mt5.symbol_info(symbol)
-        digits = info.digits if info else 5
-        spread_pips = round((tick.ask - tick.bid) * (10 ** digits), 1)
+        info     = _mt5.symbol_info(symbol)
+        digits   = info.digits if info else 5
+        pip_size = get_pip_size(symbol)
+
+        # Spread in pips using correct pip size for this symbol
+        spread_pips = round((tick.ask - tick.bid) / pip_size, 1)
 
         disconnect()
         return {
@@ -95,6 +140,7 @@ async def get_live_price(symbol: str) -> dict:
             "bid":         round(tick.bid, digits),
             "ask":         round(tick.ask, digits),
             "spread_pips": spread_pips,
+            "pip_size":    pip_size,
             "time":        datetime.fromtimestamp(tick.time, tz=timezone.utc).isoformat()
         }
 
@@ -143,7 +189,7 @@ async def get_candles(symbol: str, timeframe: str = "H1", count: int = 100) -> d
 
 
 async def get_account_info() -> dict:
-    """Get current MT5 account balance, equity, and margin info."""
+    """Get current MT5 account balance, equity, margin, and leverage."""
     try:
         if not connect():
             return {"success": False, "error": "MT5 connection failed"}
@@ -215,14 +261,19 @@ async def get_open_positions() -> dict:
 # ── Trade execution ───────────────────────────────────────────────────────────
 
 async def place_trade(
-    symbol: str,
-    direction: str,
-    volume: float,
-    stop_loss_pips: float,
+    symbol:           str,
+    direction:        str,
+    volume:           float,
+    stop_loss_pips:   float,
     take_profit_pips: float,
-    comment: str = "OpenClaw Agent"
+    comment:          str = "OpenClaw Agent"
 ) -> dict:
-    """Place a market order on Deriv MT5."""
+    """
+    Place a market order on Deriv MT5.
+
+    Uses symbol-aware pip sizes so SL/TP are calculated correctly
+    for JPY pairs, Gold, Silver, Oil, and standard forex pairs.
+    """
     try:
         if not connect():
             return {"success": False, "error": "MT5 connection failed"}
@@ -232,27 +283,51 @@ async def place_trade(
             disconnect()
             return {"success": False, "error": f"Symbol {symbol} not available"}
 
+        # Enable symbol in Market Watch if not visible
+        if not info.visible:
+            _mt5.symbol_select(symbol, True)
+
         tick = _mt5.symbol_info_tick(symbol)
         if tick is None:
             disconnect()
             return {"success": False, "error": f"Could not get price for {symbol}"}
 
         digits   = info.digits
-        pip_size = 0.0001 if digits in (4, 5) else 0.01
+        pip_size = get_pip_size(symbol)  # ← symbol-aware, fixes JPY/Gold bug
 
         if direction.upper() == "BUY":
             order_type = _tf("ORDER_TYPE_BUY")
-            price = tick.ask
-            sl = round(price - (stop_loss_pips   * pip_size), digits)
-            tp = round(price + (take_profit_pips * pip_size), digits)
+            price      = tick.ask
+            sl         = round(price - (stop_loss_pips   * pip_size), digits)
+            tp         = round(price + (take_profit_pips * pip_size), digits)
         elif direction.upper() == "SELL":
             order_type = _tf("ORDER_TYPE_SELL")
-            price = tick.bid
-            sl = round(price + (stop_loss_pips   * pip_size), digits)
-            tp = round(price - (take_profit_pips * pip_size), digits)
+            price      = tick.bid
+            sl         = round(price + (stop_loss_pips   * pip_size), digits)
+            tp         = round(price - (take_profit_pips * pip_size), digits)
         else:
             disconnect()
-            return {"success": False, "error": f"Invalid direction: {direction}. Use BUY or SELL"}
+            return {"success": False, "error": f"Invalid direction: {direction}"}
+
+        # ── Margin check before sending order ─────────────────────────────────
+        # Estimate required margin: (volume × contract_size × price) / leverage
+        account   = _mt5.account_info()
+        free_margin = account.margin_free if account else 0
+        leverage    = account.leverage    if account else 100
+
+        contract_size    = info.trade_contract_size  # usually 100000 for forex
+        estimated_margin = (volume * contract_size * price) / leverage
+
+        if estimated_margin > free_margin:
+            disconnect()
+            return {
+                "success": False,
+                "error":   (
+                    f"Insufficient margin. Required: ${estimated_margin:.2f}, "
+                    f"Available: ${free_margin:.2f}. "
+                    f"Deposit more funds or reduce lot size."
+                )
+            }
 
         request = {
             "action":       _tf("TRADE_ACTION_DEAL"),
@@ -262,7 +337,7 @@ async def place_trade(
             "price":        price,
             "sl":           sl,
             "tp":           tp,
-            "deviation":    10,
+            "deviation":    20,
             "magic":        20250228,
             "comment":      comment[:31],
             "type_time":    _tf("ORDER_TIME_GTC"),
@@ -324,10 +399,10 @@ async def close_trade(ticket: int) -> dict:
 
         if direction == _tf("ORDER_TYPE_BUY"):
             close_type = _tf("ORDER_TYPE_SELL")
-            price = tick.bid
+            price      = tick.bid
         else:
             close_type = _tf("ORDER_TYPE_BUY")
-            price = tick.ask
+            price      = tick.ask
 
         request = {
             "action":       _tf("TRADE_ACTION_DEAL"),
@@ -336,7 +411,7 @@ async def close_trade(ticket: int) -> dict:
             "type":         close_type,
             "position":     ticket,
             "price":        price,
-            "deviation":    10,
+            "deviation":    20,
             "magic":        20250228,
             "comment":      "OpenClaw Close",
             "type_time":    _tf("ORDER_TIME_GTC"),
@@ -378,15 +453,15 @@ async def get_trade_history(days: int = 7) -> dict:
             disconnect()
             return {"success": True, "trades": [], "summary": {}}
 
-        trades: list[dict] = []
+        trades:      list[dict] = []
         total_profit = 0.0
-        wins   = 0
-        losses = 0
+        wins         = 0
+        losses       = 0
 
         for d in deals:
             if d.type not in (_tf("DEAL_TYPE_BUY"), _tf("DEAL_TYPE_SELL")):
                 continue
-            profit = round(d.profit, 2)
+            profit        = round(d.profit, 2)
             total_profit += profit
             if profit > 0:
                 wins += 1
@@ -405,7 +480,7 @@ async def get_trade_history(days: int = 7) -> dict:
             })
 
         total_trades = wins + losses
-        win_rate = round((wins / total_trades * 100), 1) if total_trades > 0 else 0
+        win_rate     = round((wins / total_trades * 100), 1) if total_trades > 0 else 0
 
         disconnect()
         return {
