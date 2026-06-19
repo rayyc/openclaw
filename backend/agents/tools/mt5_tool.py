@@ -345,6 +345,11 @@ async def place_trade(
         }
 
         result = _mt5.order_send(request)
+        if result is not None and result.retcode == 10030:
+            # Some Deriv MT5 accounts do not support IOC filling mode.
+            # Retry without explicit filling so the broker can use its default mode.
+            request.pop("type_filling", None)
+            result = _mt5.order_send(request)
 
         if result is None:
             error = _mt5.last_error()
@@ -419,6 +424,9 @@ async def close_trade(ticket: int) -> dict:
         }
 
         result = _mt5.order_send(request)
+        if result is not None and result.retcode == 10030:
+            request.pop("type_filling", None)
+            result = _mt5.order_send(request)
 
         if result is None or result.retcode != _tf("TRADE_RETCODE_DONE"):
             error = _mt5.last_error() if result is None else result.comment
